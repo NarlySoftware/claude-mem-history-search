@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory History Search</title>
+<script>
+  // Apply the saved theme before anything draws, so there's no flash. "auto" (or nothing) follows the device.
+  try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6ec;
+    --accent: #3559e0; --accent-soft: #e8edfd; --mark: #fff1a8; --shadow: 0 1px 2px rgba(16,24,40,.06);
+    --discovery: #2f7de1; --change: #2e9d6a; --feature: #8a4fd8; --bugfix: #d64545;
+    --decision: #c98a12; --refactor: #128a9a; --other: #7a8394; --summary: #b4691f; --prompt: #4b5bd6;
+  }
+  :root { color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #12151b; --panel: #1a1e26; --text: #e6e9ef; --muted: #98a2b3; --line: #2a303b;
+      --accent: #7c9cff; --accent-soft: #232c45; --mark: #5c4d0a; --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #12151b; --panel: #1a1e26; --text: #e6e9ef; --muted: #98a2b3; --line: #2a303b;
+    --accent: #7c9cff; --accent-soft: #232c45; --mark: #5c4d0a; --shadow: none;
+  }
+  #theme, #filtersBtn { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }  /* no iOS text inflation in landscape */
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+  .top { display: flex; align-items: center; gap: 12px; padding: 14px 0 10px; }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; white-space: nowrap; }
+  .search { flex: 1; display: flex; gap: 8px; min-width: 0; position: relative; }
+  input, select, button { font: inherit; color: inherit; }
+  textarea, select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  /* The search box grows with the question (up to 5 lines, then scrolls); ✕ clears it. */
+  #q { flex: 1; min-width: 0; resize: none; overflow-y: hidden; font: inherit; color: inherit; line-height: 1.4;
+       padding-right: 38px; max-height: calc(5 * 1.4em + 16px); display: block; }
+  #clear { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px;
+           border: 0; border-radius: 50%; background: var(--muted); color: var(--panel); font-size: 12px;
+           line-height: 22px; padding: 0; cursor: pointer; opacity: .75; }
+  #clear:hover { opacity: 1; }
+  input:focus, textarea:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  select { max-width: 100%; min-width: 0; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-bottom: 10px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .seg button { border: 0; background: transparent; padding: 6px 12px; cursor: pointer; }
+  .seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  #project { max-width: 260px; }
+  .pager { display: flex; align-items: center; gap: 6px; padding: 8px 0 12px; flex-wrap: wrap; }
+  .pager button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; cursor: pointer; }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .pager .pg { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .pager .pg input { width: 64px; text-align: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+  .count { margin-left: auto; color: var(--muted); }
+  main { padding: 14px 0 40px; }
+  .item { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; box-shadow: var(--shadow); }
+  .head { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; padding: 10px 14px; cursor: pointer; }
+  .idx { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; padding-top: 1px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; color: var(--muted); font-size: 12.5px; }
+  .badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+           color: #fff; background: var(--other); }
+  .title { font-weight: 600; margin-top: 2px; }
+  .sub { color: var(--muted); }
+  .snip { margin-top: 3px; color: var(--muted); }
+  .title, .sub, .snip, .body, .meta { overflow-wrap: anywhere; word-break: break-word; }  /* break-word: iOS < 15.4 */
+  .body { display: none; padding: 0 14px 14px 76px; }
+  .item.open .body { display: block; }
+  .body h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .body p { margin: 0; white-space: pre-wrap; }
+  .body ul { margin: 0; padding-left: 18px; }
+  .files { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; }
+  .empty, .err { text-align: center; color: var(--muted); padding: 50px 0; }
+  .err { color: var(--bugfix); }
+  .keys { color: var(--muted); font-size: 12px; padding-bottom: 8px; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: 11px; }
+  #filtersBtn[aria-expanded=true] { background: var(--accent-soft); color: var(--accent); }
+  .bottom-pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 8px 0 4px; color: var(--muted); }
+  .bottom-pager button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; cursor: pointer; }
+  .bottom-pager button:disabled { opacity: .4; cursor: default; }
+  /* Session view: a session laid out by turn (your prompt, the summary, that turn's notes). */
+  .sessbar { display: none; align-items: center; gap: 10px; padding: 0 0 10px; flex-wrap: wrap; }
+  body.in-session .sessbar { display: flex; }
+  body.in-session .filters, body.in-session .pager, body.in-session .keys, body.in-session #filtersBtn { display: none; }
+  .sessbar button, .more button, .ctx { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 11px; cursor: pointer; }
+  .sessbar button { white-space: nowrap; flex-shrink: 0; }
+  .ctx { margin-top: 12px; color: var(--accent); font-weight: 600; }
+  .sessinfo { color: var(--muted); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+  .sessinfo b { color: var(--text); font-weight: 600; }
+  .more { text-align: center; padding: 4px 0 12px; }
+  .turn { border-left: 3px solid var(--line); padding: 0 0 6px 12px; margin: 0 0 18px; }
+  .turn.focus { border-left-color: var(--accent); }
+  .turn-head { color: var(--muted); font-size: 12.5px; font-weight: 600; padding: 2px 0 8px; }
+  .turn .head { grid-template-columns: minmax(0, 1fr); } .turn .idx { display: none; } .turn .body { padding-left: 14px; }
+  .you { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px;
+         white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+  .you .meta { margin-bottom: 4px; white-space: normal; }
+  .notes > summary { cursor: pointer; color: var(--muted); padding: 4px 0 8px; font-size: 13px; }
+  .hit { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+  /* Grouped results: one card per session holding its best matches. */
+  .group { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 8px;
+           margin-bottom: 12px; box-shadow: var(--shadow); }
+  .ghead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 2px 8px; }
+  .gidx { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ginfo { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .ginfo b { color: var(--text); font-weight: 600; }
+  .ghead .ctx { margin-top: 0; }
+  .group .item { box-shadow: none; background: var(--bg); }
+  .group .head { grid-template-columns: minmax(0, 1fr); } .group .idx { display: none; } .group .body { padding-left: 14px; }
+  .gmore { color: var(--muted); font-size: 12.5px; padding: 0 4px 4px; }
+  .phone { display: none; }
+  /* Phones: title + Filters + theme on top, full-width search under it; filters open on demand;
+     paging at the bottom. */
+  @media (max-width: 640px) {
+    .phone { display: inline; }
+    .keys { display: none; }
+    .top { flex-wrap: wrap; gap: 8px; padding: 10px 0 6px; }
+    h1 { font-size: 16px; }
+    #filtersBtn { margin-left: auto; }
+    .search { order: 3; flex: 1 1 100%; }
+    #theme .tlbl { display: none; }
+    input, textarea, select, button, #q { font-size: 16px; }  /* #q: its own `font` rule outranks a bare `textarea` */
+    #clear { font-size: 12px; }  /* under 16px, iOS Safari zooms in when a field is tapped */
+    header:not(.show-filters) .filters { display: none; }
+    .filters { padding-bottom: 8px; }
+    #project { max-width: none; flex: 1 1 100%; width: 100%; }
+    #size { display: none; }
+    .pager > button, .pager .pg { display: none; }
+    .pager { padding: 0 0 8px; }
+    .count { margin-left: 0; font-size: 13px; }
+    main { padding-top: 10px; }
+    .head { grid-template-columns: minmax(0, 1fr); padding: 10px 12px; } .idx { display: none; }
+    .body { padding: 0 12px 12px; }
+    .turn { padding-left: 8px; } .turn .body { padding-left: 12px; }
+    body.in-session #theme { margin-left: auto; }
+    .gidx { display: none; } .ginfo { flex-basis: 100%; } .ghead .ctx { margin-left: auto; }
+    .group { padding: 10px 10px 6px; }
+    .sessbar { flex-wrap: nowrap; padding-bottom: 8px; } .sessinfo { font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="top">
+      <h1>Memory history</h1>
+      <form class="search" id="form">
+        <textarea id="q" rows="1" placeholder='Ask or type words…  "exact phrase"  -exclude' autocomplete="off"
+          autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Search"></textarea>
+        <button type="button" id="clear" aria-label="Clear search" title="Clear" hidden>✕</button>
+        <button type="submit" hidden>Search</button>
+      </form>
+      <button type="button" id="filtersBtn" class="phone" aria-expanded="false" aria-controls="filters">Filters</button>
+      <button type="button" id="theme" title="Theme: auto follows your device"></button>
+    </div>
+    <div class="sessbar" id="sessbar">
+      <button type="button" id="back">← Results</button>
+      <span class="sessinfo" id="sessinfo"></span>
+    </div>
+    <div class="filters" id="filters">
+      <div class="seg" id="mode" role="group" aria-label="What to search">
+        <button type="button" data-v="conversation" aria-pressed="false" title="Your prompts and the per-turn summaries">Conversation</button>
+        <button type="button" data-v="notes" aria-pressed="false" title="Observations and summaries">Notes</button>
+        <button type="button" data-v="everything" aria-pressed="true" title="Prompts, summaries and observations">Everything</button>
+      </div>
+      <div class="seg"><button type="button" id="meaning" aria-pressed="true"
+        title="Also find results by meaning, not just matching words (via the claude-mem worker; adds ~0.5 s)">Meaning</button></div>
+      <div class="seg"><button type="button" id="group" aria-pressed="false"
+        title="One result per session, with its best matches">Group by session</button></div>
+      <select id="project" aria-label="Project"><option value="">All projects</option></select>
+      <select id="type" aria-label="Observation type">
+        <option value="">All types</option>
+        <option>discovery</option><option>change</option><option>feature</option>
+        <option>bugfix</option><option>decision</option><option>refactor</option>
+        <option value="other">other</option>
+      </select>
+      <select id="sort" aria-label="Order">
+        <option value="best">Best match</option><option value="newest">Newest first</option><option value="oldest">Oldest first</option>
+      </select>
+      <select id="size" aria-label="Per page">
+        <option>10</option><option selected>25</option><option>50</option><option>100</option>
+      </select>
+    </div>
+    <div class="pager">
+      <button id="first" title="First page (Home)">⏮<span class="lbl"> First</span></button>
+      <button id="prev" title="Previous (←)">◀<span class="lbl"> Prev</span></button>
+      <span class="pg"><span class="lbl">Page</span> <input id="page" inputmode="numeric" aria-label="Go to page"> of <span id="pages">–</span></span>
+      <button id="next" title="Next (→)"><span class="lbl">Next </span>▶</button>
+      <button id="last" title="Last page (End)"><span class="lbl">Last </span>⏭</button>
+      <span class="count"><span id="count"></span><span id="active" class="phone"></span></span>
+    </div>
+    <div class="keys"><kbd>/</kbd> search · <kbd>←</kbd><kbd>→</kbd> prev/next · <kbd>Home</kbd><kbd>End</kbd> first/last · click a result for details · filler words like "where did we talk about" are ignored</div>
+  </div>
+</header>
+<main class="wrap" id="results"></main>
+
+<script>
+const $ = id => document.getElementById(id);
+const DEFAULTS = { q: "", mode: "everything", project: "", type: "", sort: "", size: 25, page: 1, meaning: "1", group: "0" };
+const state = { ...DEFAULTS, pages: 1 };
+const TYPE_COLORS = ["discovery","change","feature","bugfix","decision","refactor"];
+
+function readHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  for (const k of ["q","mode","project","type","sort","meaning","group"]) if (h.has(k)) state[k] = h.get(k);
+  if (h.has("size")) state.size = +h.get("size") || 25;
+  if (h.has("page")) state.page = +h.get("page") || 1;
+}
+function writeHash() {
+  const h = new URLSearchParams();
+  for (const k of ["q","mode","project","type","sort","size","page","meaning","group"]) if (state[k] !== DEFAULTS[k]) h.set(k, state[k]);
+  history.replaceState(null, "", h.toString() ? "#" + h : location.pathname);
+}
+function syncControls() {
+  // Don't rewrite the box while it holds the same query, or the space just typed after a word vanishes.
+  if ($("q").value.trim() !== state.q) $("q").value = state.q;
+  fitSearch();
+  $("project").value = state.project; $("type").value = state.type;
+  $("size").value = String(state.size);
+  $("type").style.display = state.mode === "conversation" ? "none" : "";
+  for (const b of $("mode").children) b.setAttribute("aria-pressed", b.dataset.v === state.mode);
+  $("meaning").setAttribute("aria-pressed", state.meaning === "1");
+  $("group").setAttribute("aria-pressed", state.group === "1");
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let termRe = null;
+// Words matching the query's stems ("sampl" -> samples, sampling) get <mark>.
+const hl = s => { const e = esc(s); return termRe ? e.replace(termRe, m => `<mark>${m}</mark>`) : e; };
+// Server-highlighted text uses \x02 … \x03 markers around matches.
+const marked = s => esc(s).replace(/\x02/g, "<mark>").replace(/\x03/g, "</mark>");
+const list = v => { if (!v) return []; try { const a = JSON.parse(v); return Array.isArray(a) ? a.filter(Boolean) : [String(a)]; } catch { return [String(v)]; } };
+const when = ms => new Date(ms).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const sect = (label, html) => html ? `<h4>${label}</h4>${html}` : "";
+const para = v => v ? `<p>${hl(v)}</p>` : "";
+const ul = (arr, cls = "") => arr.length ? `<ul class="${cls}">${arr.map(x => `<li>${hl(x)}</li>`).join("")}</ul>` : "";
+const short = (s, n) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
+
+// where: "results" (a search hit), "session" (inside the session view), "group" (inside a session group)
+function card(it, n, where = "results") {
+  const inSession = where !== "results";
+  const d = it.detail || {};
+  let badge, title, sub = "", body = "";
+  if (it.kind === "observation") {
+    const t = TYPE_COLORS.includes(it.type) ? it.type : "other";
+    badge = `<span class="badge" style="background:var(--${t})">${esc(it.type || "note")}</span>`;
+    title = it.title || "(untitled)"; sub = d.subtitle;
+    body = sect("Narrative", para(d.narrative)) + sect("Facts", ul(list(d.facts)))
+         + sect("Files read", ul(list(d.files_read), "files")) + sect("Files modified", ul(list(d.files_modified), "files"));
+  } else if (it.kind === "summary") {
+    badge = `<span class="badge" style="background:var(--summary)">summary</span>`;
+    title = it.title || "(no request)"; sub = short(d.learned || d.completed, 240);
+    body = sect("Investigated", para(d.investigated)) + sect("Learned", para(d.learned))
+         + sect("Completed", para(d.completed)) + sect("Next steps", para(d.next_steps)) + sect("Notes", para(d.notes))
+         + sect("Files edited", ul(list(d.files_edited), "files"));
+  } else {
+    const who = it.type === "agent" ? "agent" : "you";
+    badge = `<span class="badge" style="background:var(--${who === "you" ? "prompt" : "other"})">${who}${d.prompt_number ? " · turn " + d.prompt_number : ""}</span>`;
+    const txt = d.prompt_text || "";
+    title = short(txt, 220);
+    body = txt.length > 220 ? sect("Full prompt", para(txt)) : "";
+  }
+  // A ranked hit shows where it matched: highlighted title, plus the matching passage instead of the subtitle.
+  const titleHtml = it.title_hl && it.kind !== "prompt" ? marked(it.title_hl) : hl(title);
+  const lower = it.snippet && it.kind !== "prompt" ? `<div class="snip">${marked(it.snippet)}</div>`
+              : sub ? `<div class="sub">${hl(sub)}</div>` : "";
+  const plat = it.platform_source && it.platform_source !== "claude" ? ` · ${esc(it.platform_source)}` : "";
+  if (!inSession && it.session) {
+    body = `<button type="button" class="ctx" data-session="${esc(it.session)}" data-turn="${d.prompt_number ?? ""}"
+      data-hl="${it.kind}:${it.src_id}">Show in session →</button>` + body;
+  }
+  const hit = where === "session" && sess.hl === `${it.kind}:${it.src_id}` ? " hit" : "";
+  return `<article class="item${hit}" id="${it.kind}-${it.src_id}">
+    <div class="head"><div class="idx">${n}</div><div>
+      <div class="meta">${badge}<span>${when(it.created_at_epoch)}</span>${inSession ? "" : `<span>${esc(it.project || "")}${plat}</span>`}</div>
+      <div class="title">${titleHtml}</div>${lower}
+    </div></div>
+    ${body ? `<div class="body">${body}</div>` : ""}
+  </article>`;
+}
+
+function groupCard(g, n, hasQuery) {
+  const best = g.items[0];
+  const open = g.session && best ? `<button type="button" class="ctx" data-session="${esc(g.session)}"
+      data-turn="${best.detail?.prompt_number ?? ""}" data-hl="${best.kind}:${best.src_id}">Open session →</button>` : "";
+  const what = hasQuery ? (g.matches === 1 ? "1 match" : `${g.matches} matches`) : (g.matches === 1 ? "1 record" : `${g.matches} records`);
+  const rest = g.matches - g.items.length;
+  return `<section class="group">
+    <div class="ghead"><span class="gidx">${n}</span><span class="ginfo"><b>${esc(g.project || "")}</b> · ${what}`
+    + `${g.first_epoch ? " · " + esc(dateSpan(g.first_epoch, g.last_epoch)) : ""}</span>${open}</div>
+    ${g.items.map(it => card(it, "", "group")).join("")}
+    ${rest > 0 ? `<div class="gmore">+ ${rest} more in this session</div>` : ""}
+  </section>`;
+}
+
+function activeFilters() {
+  const a = [];
+  if (state.mode !== "everything") a.push(state.mode[0].toUpperCase() + state.mode.slice(1));
+  if (state.project) a.push(state.project);
+  if (state.type) a.push(state.type);
+  if (state.sort) a.push($("sort").selectedOptions[0]?.textContent || state.sort);
+  if (state.meaning === "0") a.push("meaning off");
+  if (state.group === "1") a.push("by session");
+  return a;
+}
+
+function render(d) {
+  termRe = d.terms.length ? new RegExp("\\b(" + d.terms.map(t => t.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("|") + ")[\\w]*", "gi") : null;
+  state.page = d.page; state.pages = d.pages; state.sort = d.sort === (state.q ? "best" : "newest") ? "" : d.sort; writeHash();
+  $("sort").value = d.sort; $("sort").options[0].disabled = !d.terms.length;
+  $("page").value = d.page; $("pages").textContent = d.pages.toLocaleString();
+  $("first").disabled = $("prev").disabled = d.page <= 1;
+  $("last").disabled = $("next").disabled = d.page >= d.pages;
+  const shown = d.grouped ? d.groups.length : d.items.length;
+  const range = `${d.first_index.toLocaleString()}–${(d.first_index + shown - 1).toLocaleString()}`;
+  $("count").textContent = !d.total ? "No matches"
+    : d.grouped ? `${range} of ${d.total.toLocaleString()} session${d.total === 1 ? "" : "s"}${d.capped ? " (from the best matches)" : ""}`
+    : d.capped ? `${range} of the ${d.total} best matches`
+    : `${range} of ${d.total.toLocaleString()}`;
+  if (d.semantic === false) $("count").textContent += " · meaning search unavailable (claude-mem worker not responding)";
+  const active = activeFilters();
+  $("active").textContent = active.map(x => " · " + x).join("");
+  $("filtersBtn").textContent = active.length ? `Filters (${active.length})` : "Filters";
+  if (!shown) { $("results").innerHTML = `<div class="empty">Nothing found.</div>`; return; }
+  const nav = d.pages > 1 ? `<nav class="bottom-pager">
+      <button data-go="${d.page - 1}" ${d.page <= 1 ? "disabled" : ""}>◀ Prev</button>
+      <span>Page ${d.page.toLocaleString()} of ${d.pages.toLocaleString()}</span>
+      <button data-go="${d.page + 1}" ${d.page >= d.pages ? "disabled" : ""}>Next ▶</button></nav>` : "";
+  $("results").innerHTML = (d.grouped
+    ? d.groups.map((g, i) => groupCard(g, (d.first_index + i).toLocaleString(), d.terms.length > 0)).join("")
+    : d.items.map((it, i) => card(it, (d.first_index + i).toLocaleString())).join("")) + nav;
+  window.scrollTo({ top: 0 });
+}
+
+let seq = 0;
+async function load() {
+  const my = ++seq;
+  const p = new URLSearchParams({ q: state.q, mode: state.mode, project: state.project, type: state.type,
+                                  sort: state.sort, size: state.size, page: state.page, meaning: state.meaning,
+                                  group: state.group });
+  try {
+    const r = await fetch("/api/find?" + p);
+    const d = await r.json();
+    if (my !== seq) return;
+    if (d.error) throw new Error(d.error);
+    render(d);
+  } catch (e) {
+    if (my === seq) $("results").innerHTML = `<div class="err">Search failed: ${esc(e.message)}</div>`;
+  }
+}
+function go(page) { state.page = page; load(); }
+function reset(changes) { leaveSession(); Object.assign(state, changes, { page: 1 }); syncControls(); load(); }
+
+// ----- Session view (#session=<id>&turn=<n>&hl=<kind>:<id>)
+const sess = { id: "", turn: null, hl: "", before: 2, after: 2, fromSearch: false };
+const inSessionView = () => document.body.classList.contains("in-session");
+function leaveSession() { document.body.classList.remove("in-session"); }
+
+function openSession(id, turn, hl) {
+  history.pushState(null, "", "#" + new URLSearchParams({ session: id, ...(turn ? { turn } : {}), ...(hl ? { hl } : {}) }));
+  sess.fromSearch = true;
+  route();
+}
+
+async function showSession(anchor) {
+  const my = ++seq;
+  document.body.classList.add("in-session");
+  const p = new URLSearchParams({ session: sess.id, before: sess.before, after: sess.after, ...(sess.turn ? { turn: sess.turn } : {}) });
+  try {
+    const r = await fetch("/api/session?" + p);
+    const d = await r.json();
+    if (my !== seq) return;
+    if (d.error) throw new Error(r.status === 404 ? "This session isn't available." : d.error);
+    renderSession(d, anchor);
+  } catch (e) {
+    if (my === seq) $("results").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
+function dateSpan(a, b) {
+  const day = ms => new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const time = ms => new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return day(a) === day(b) ? `${day(a)} · ${time(a)} – ${time(b)}` : `${day(a)} – ${day(b)}`;
+}
+
+function renderSession(d, anchor) {
+  const span = d.first_epoch ? dateSpan(d.first_epoch, d.last_epoch) : "";
+  $("sessinfo").innerHTML = `<b>${esc(d.project || "")}</b> · ${d.turn_numbers.length} turn${d.turn_numbers.length === 1 ? "" : "s"} · ${esc(span)}`;
+  const turns = d.turns.map(t => {
+    const isFocus = t.turn === d.focus_turn;
+    const you = t.prompts.map(p => `<div class="you${sess.hl === "prompt:" + p.id ? " hit" : ""}" id="prompt-${p.id}">`
+      + `<div class="meta"><span class="badge" style="background:var(--${p.agent ? "other" : "prompt"})">${p.agent ? "agent" : "you"}</span>`
+      + `<span>${when(p.created_at_epoch)}</span></div>${hl(p.prompt_text)}</div>`).join("");
+    const sums = t.summaries.map(x => card({ kind: "summary", src_id: x.id, title: x.request, detail: x,
+                                              created_at_epoch: x.created_at_epoch }, "", "session")).join("");
+    const hitNote = t.notes.some(n => sess.hl === "observation:" + n.id);
+    const notes = t.notes_total ? `<details class="notes"${hitNote ? " open" : ""}><summary>${t.notes_total} note${t.notes_total === 1 ? "" : "s"}`
+      + `${t.notes_total > t.notes.length ? ` (first ${t.notes.length} shown)` : ""}</summary>`
+      + t.notes.map(x => card({ kind: "observation", src_id: x.id, type: x.type, title: x.title, detail: x,
+                                created_at_epoch: x.created_at_epoch }, "", "session")).join("") + `</details>` : "";
+    return `<section class="turn${isFocus ? " focus" : ""}" id="turn-${t.turn}">
+      <div class="turn-head">Turn ${t.turn}${t.at ? " · " + esc(when(t.at)) : ""}</div>${you}${sums}${notes}</section>`;
+  }).join("");
+  $("results").innerHTML =
+    (d.has_earlier ? `<div class="more"><button type="button" data-more="earlier">↑ Earlier turns</button></div>` : "")
+    + turns
+    + (d.has_later ? `<div class="more"><button type="button" data-more="later">Later turns ↓</button></div>` : "");
+  if (anchor) {  // keep the turn that was at the top of the screen where it was
+    const el = document.getElementById(anchor.id);
+    if (el) window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - anchor.top });
+  } else {
+    const target = (sess.hl && document.getElementById(sess.hl.replace(":", "-"))) || document.getElementById("turn-" + d.focus_turn);
+    if (target) target.scrollIntoView({ block: "center" }); else window.scrollTo({ top: 0 });
+  }
+}
+
+function moreTurns(which) {
+  // Keep the first turn on screen where it is: earlier turns load above it, later ones below.
+  const first = $("results").querySelector(".turn");
+  if (which === "earlier") sess.before += 5; else sess.after += 5;
+  showSession(first ? { id: first.id, top: first.getBoundingClientRect().top } : null);
+}
+
+function route() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.has("session")) {
+    Object.assign(sess, { id: h.get("session"), turn: +h.get("turn") || null, hl: h.get("hl") || "", before: 2, after: 2 });
+    showSession();
+  } else {
+    leaveSession();
+    readHash(); syncControls(); load();
+  }
+}
+window.addEventListener("popstate", route);
+$("back").onclick = () => {
+  if (sess.fromSearch) history.back();
+  else { history.pushState(null, "", location.pathname); route(); }
+};
+
+function fitSearch() {
+  const q = $("q");
+  q.style.height = "auto";
+  q.style.height = q.scrollHeight + 2 + "px";  // + top/bottom border
+  q.style.overflowY = q.scrollHeight > q.clientHeight + 1 ? "auto" : "hidden";
+  $("clear").hidden = !q.value;
+}
+$("form").onsubmit = e => { e.preventDefault(); reset({ q: $("q").value.trim(), sort: "" }); };
+let t; $("q").oninput = () => {
+  const q = $("q");
+  if (/[\r\n]/.test(q.value)) q.value = q.value.replace(/\s*[\r\n]+\s*/g, " ");  // pasted text stays one line
+  fitSearch();
+  clearTimeout(t); t = setTimeout(() => reset({ q: q.value.trim(), sort: "" }), 350);
+};
+$("q").onkeydown = e => {  // Return searches (it's a text area only so long questions can wrap)
+  if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); clearTimeout(t); $("form").requestSubmit(); }
+};
+$("clear").onclick = () => { clearTimeout(t); $("q").value = ""; fitSearch(); reset({ q: "", sort: "" }); $("q").focus(); };
+window.addEventListener("resize", fitSearch);
+$("project").onchange = () => reset({ project: $("project").value });
+$("meaning").onclick = () => reset({ meaning: state.meaning === "1" ? "0" : "1" });
+$("group").onclick = () => reset({ group: state.group === "1" ? "0" : "1" });
+$("type").onchange = () => reset({ type: $("type").value });
+$("sort").onchange = () => reset({ sort: $("sort").value });
+$("size").onchange = () => reset({ size: +$("size").value });
+$("mode").onclick = e => { const v = e.target.closest("button")?.dataset.v; if (v) reset({ mode: v, type: v === "conversation" ? "" : state.type }); };
+$("first").onclick = () => go(1);
+$("prev").onclick = () => go(Math.max(1, state.page - 1));
+$("next").onclick = () => go(Math.min(state.pages, state.page + 1));
+$("last").onclick = () => go(state.pages);
+$("page").onchange = () => { const n = parseInt($("page").value, 10); go(Number.isFinite(n) ? Math.min(Math.max(1, n), state.pages) : state.page); };
+$("filtersBtn").onclick = () => {
+  const open = document.querySelector("header").classList.toggle("show-filters");
+  $("filtersBtn").setAttribute("aria-expanded", open);
+};
+$("results").onclick = e => {
+  const c = e.target.closest("[data-session]");
+  if (c) return openSession(c.dataset.session, c.dataset.turn, c.dataset.hl);
+  const m = e.target.closest("[data-more]");
+  if (m) return moreTurns(m.dataset.more);
+  const g = e.target.closest("[data-go]"); if (g) return go(+g.dataset.go); const h = e.target.closest(".head"); if (h && !getSelection().toString()) h.parentElement.classList.toggle("open"); };
+document.addEventListener("keydown", e => {
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (e.key === "/" && !typing) { e.preventDefault(); $("q").focus(); return; }
+  if (e.key === "Escape" && typing) { document.activeElement.blur(); return; }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || inSessionView()) return;
+  if (e.key === "ArrowRight" && state.page < state.pages) go(state.page + 1);
+  else if (e.key === "ArrowLeft" && state.page > 1) go(state.page - 1);
+  else if (e.key === "Home") { e.preventDefault(); go(1); }
+  else if (e.key === "End") { e.preventDefault(); go(state.pages); }
+});
+
+const THEMES = ["auto", "light", "dark"], THEME_LABEL = { auto: "◐ Auto", light: "☀ Light", dark: "☾ Dark" };
+function showTheme() {
+  const t = document.documentElement.dataset.theme || "auto";
+  const [icon, word] = THEME_LABEL[t].split(" ");
+  $("theme").innerHTML = `${icon}<span class="tlbl"> ${word}</span>`;
+  $("theme").setAttribute("aria-label", `Theme: ${t}. Click to change.`);
+}
+$("theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || "auto";
+  const next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+  if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch {}
+  showTheme();
+};
+showTheme();
+
+(async () => {
+  readHash();
+  try {
+    const d = await (await fetch("/api/projects")).json();
+    $("project").insertAdjacentHTML("beforeend",
+      d.projects.map(p => `<option value="${esc(p.project)}">${esc(p.project)} (${p.n.toLocaleString()})</option>`).join(""));
+  } catch {}
+  route();
+})();
+</script>
+</body>
+</html>

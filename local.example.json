@@ -1,0 +1,6 @@
+{
+  "hide_projects": ["some-project-to-keep-out-of-search"],
+  "hide_marked": [
+    {"project": "some-project", "markers": ["words that mark", "records to hide"]}
+  ]
+}
