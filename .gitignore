@@ -6,3 +6,6 @@ data/
 /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.txt
 # Your own settings (see local.example.json)
 local.json
+# Benchmark queries and results quote your own history
+bench/*.json
+bench/results/
